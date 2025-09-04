@@ -21,8 +21,10 @@ def ensure_data():
     if all((DATA_DIR/f).exists() for f in needed):
         return
     st.info("Завантажую Olist dataset...")
-    url = "github.com/pickrace/olist-streamlit-bi/releases/download/v1.0/olis_data.zip"
+    url = "https://github.com/pickrace/olist-streamlit-bi/releases/download/v1.0/olis_data.zip"
+    st.write("Downloading from:", url)
     r = requests.get(url)
+    st.write("Content-Type:", r.headers.get("Content-Type"))
     z = zipfile.ZipFile(io.BytesIO(r.content))
     z.extractall(DATA_DIR)
 
