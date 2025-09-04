@@ -7,3 +7,6 @@ pyarrow>=16.0
 python-dateutil>=2.9
 kaggle>=1.6
 requests>=2.31
+openai>=1.40
+duckdb>=0.10
+pydantic>=2.7
