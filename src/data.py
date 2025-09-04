@@ -19,7 +19,7 @@ KAGGLE_FILENAMES = {
 def _exists_all(base_dir: str) -> bool:
     return all(os.path.exists(os.path.join(base_dir, fn)) for fn in KAGGLE_FILENAMES.values())
 
-def load_csvs(base_dir: str) -> Dict[str, pd.DataFrame]:
+def load_csvs(base_dir: str, nrows: int | None = None) -> Dict[str, pd.DataFrame]:
     dfs: Dict[str, pd.DataFrame] = {}
     for key, fn in KAGGLE_FILENAMES.items():
         path = os.path.join(base_dir, fn)
@@ -27,10 +27,11 @@ def load_csvs(base_dir: str) -> Dict[str, pd.DataFrame]:
             dfs[key] = pd.DataFrame()
             continue
         try:
-            dfs[key] = pd.read_csv(path, sep=",", encoding="utf-8", low_memory=False)
-        except UnicodeDecodeError:
-            dfs[key] = pd.read_csv(path, sep=",", encoding="latin1", low_memory=False)
+            dfs[key] = pd.read_csv(path, sep=",", encoding="utf-8", low_memory=False, nrows=10000)
+        except Exception:
+            dfs[key] = pd.read_csv(path, sep=",", encoding="latin1", low_memory=False, nrows=10000)
     return dfs
+
 
 
 def synthetic_orders(n: int = 5000, seed: int = 42) -> pd.DataFrame:
