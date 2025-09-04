@@ -53,29 +53,5 @@ start_d, end_d = date_range
 mask = (facts["purchase_date"] >= start_d) & (facts["purchase_date"] <= end_d)
 view = facts.loc[mask].copy()
 
-# KPIs
-orders_cnt = view.shape[0]
-revenue = float(view["gross_revenue"].sum())
-aov = revenue / orders_cnt if orders_cnt else 0.0
-on_time_rate = view["on_time"].mean() if orders_cnt else 0.0
-
-c1,c2,c3,c4 = st.columns(4)
-c1.metric("Замовлення", f"{orders_cnt:,}")
-c2.metric("Виручка", f"${revenue:,.0f}")
-c3.metric("AOV", f"${aov:,.2f}")
-c4.metric("On‑time доставка", f"{on_time_rate*100:,.1f}%")
-
-st.subheader("Тренди")
-by_date = view.groupby("purchase_date", as_index=False).agg(
-    revenue=("gross_revenue","sum"),
-    orders=("order_id","count"),
-    on_time=("on_time","mean")
-)
-if not by_date.empty:
-    fig = px.line(by_date, x="purchase_date", y=["revenue","orders"])
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Недостатньо даних у вибраному періоді.")
-
 st.markdown("---")
 st.caption("Дані: Brazilian E‑Commerce Public Dataset by Olist (Kaggle, CC BY‑NC‑SA 4.0) • Цей застосунок — академічний приклад.")
