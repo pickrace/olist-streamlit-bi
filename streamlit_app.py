@@ -1,7 +1,33 @@
-import streamlit as st
+import pathlib, requests, zipfile, io, streamlit as st
 import pandas as pd
 import plotly.express as px
 from src.data import get_facts
+
+DATA_DIR = pathlib.Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+def ensure_data():
+    needed = [
+        "olist_orders_dataset.csv",
+        "olist_order_items_dataset.csv",
+        "olist_order_payments_dataset.csv",
+        "olist_order_reviews_dataset.csv",
+        "olist_customers_dataset.csv",
+        "olist_geolocation_dataset.csv",
+        "olist_products_dataset.csv",
+        "olist_sellers_dataset.csv",
+        "product_category_name_translation.csv",
+    ]
+    if all((DATA_DIR/f).exists() for f in needed):
+        return
+    st.info("Завантажую Olist dataset...")
+    url = "https://github.com/<твій_юзер>/<твій_repo>/releases/download/v1.0/olist_data.zip"
+    r = requests.get(url)
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    z.extractall(DATA_DIR)
+
+ensure_data()
+
 
 st.set_page_config(page_title="BI — Olist Ecommerce", layout="wide", initial_sidebar_state="expanded")
 st.title("Інтелектуальний аналіз для оптимізації бізнес‑процесів — Olist")
