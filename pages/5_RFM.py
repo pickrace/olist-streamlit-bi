@@ -1,60 +1,79 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+
 from src.data import get_facts
 
 st.set_page_config(page_title="RFM — Olist BI", layout="wide")
+st.title("👥 RFM — сегментація клієнтів")
 
+# --- Дані: ліміт беремо ТІЛЬКИ з головної (або всі дані, якщо ключа нема)
 @st.cache_data(show_spinner=False)
-def load_facts():
-    f = get_facts("data").copy()
-    f = f.dropna(subset=["order_purchase_timestamp"])
-    f["purchase_date"] = pd.to_datetime(f["order_purchase_timestamp"]).dt.date
-    f["gross_revenue"] = pd.to_numeric(f.get("gross_revenue", 0), errors="coerce").fillna(0.0)
+def load_facts(data_dir: str, max_orders: int | None):
+    """
+    Тягнемо факт-таблицю. Якщо на головній вибраний ліміт — підхопимо його.
+    Якщо ключа немає → get_facts(..., max_orders=None) і беремо всі дані.
+    """
+    f = get_facts(data_dir, max_orders=max_orders).copy()
+    # страховки на випадок кастомних даних
+    if "purchase_date" not in f.columns:
+        ts = pd.to_datetime(f["order_purchase_timestamp"], errors="coerce")
+        f["purchase_date"] = ts.dt.date
+    if "gross_revenue" in f.columns:
+        f["gross_revenue"] = pd.to_numeric(f["gross_revenue"], errors="coerce").fillna(0.0)
+    else:
+        f["gross_revenue"] = 0.0
+    # якщо немає customer_id — використовуємо order_id як сурогат (демо)
     if "customer_id" not in f.columns or f["customer_id"].isna().all():
-        # якщо немає customer_id у facts — попереджаємо і використовуємо order_id як сурогат (демо)
-        f["customer_id"] = f["customer_id"] if "customer_id" in f.columns else f["order_id"]
+        f["customer_id"] = f["order_id"]
         st.warning("У facts відсутній або порожній customer_id — використовую order_id як сурогат для демо.")
     return f
 
-facts = load_facts()
+facts = load_facts("data", st.session_state.get("max_orders"))
 
-# --- фільтри
+if facts.empty:
+    st.info("Дані не знайдені. Зайди на титулку та перевір джерело/ліміт.")
+    st.stop()
+
+# --- Фільтри періоду
 min_d, max_d = facts["purchase_date"].min(), facts["purchase_date"].max()
 d1, d2 = st.date_input("Період аналізу", value=(min_d, max_d), min_value=min_d, max_value=max_d)
 view = facts.loc[(facts["purchase_date"] >= d1) & (facts["purchase_date"] <= d2)].copy()
-
-st.title("👥 RFM — сегментація клієнтів")
 
 if view.empty:
     st.info("Немає даних у вибраному періоді.")
     st.stop()
 
-snapshot = pd.to_datetime(view["order_purchase_timestamp"]).max() + pd.Timedelta(days=1)
+# --- RFM розрахунок
+snapshot = pd.to_datetime(view.get("purchase_dt", view["order_purchase_timestamp"])).max() + pd.Timedelta(days=1)
 
 rfm = (view.groupby("customer_id").agg(
-    Recency=("order_purchase_timestamp", lambda s: (snapshot - pd.to_datetime(s).max()).days),
+    Recency=("purchase_dt" if "purchase_dt" in view.columns else "order_purchase_timestamp",
+             lambda s: (snapshot - pd.to_datetime(s).max()).days),
     Frequency=("order_id", "count"),
-    Monetary=("gross_revenue", "sum")
+    Monetary=("gross_revenue", "sum"),
 ).reset_index())
 
 def qscore(series: pd.Series, asc: bool) -> pd.Series:
+    """
+    Перетворюємо показник у квінтильний бал 1..5.
+    Використовую rank(), щоб зняти зв’язки; якщо розподіл «плоский» — повертаємо 3.
+    """
     try:
-        # ранжуємо, щоб прибрати зв'язки, тоді ділимо на квінтілі
-        q = pd.qcut(series.rank(method="first"),
-                    5, labels=[5,4,3,2,1] if asc else [1,2,3,4,5])
+        lab = [5,4,3,2,1] if asc else [1,2,3,4,5]
+        q = pd.qcut(series.rank(method="first"), 5, labels=lab)
         return q.astype(int)
     except Exception:
         return pd.Series([3] * len(series), index=series.index)
 
-rfm["R"] = qscore(rfm["Recency"], asc=True)
-rfm["F"] = qscore(rfm["Frequency"], asc=False)
-rfm["M"] = qscore(rfm["Monetary"], asc=False)
+rfm["R"] = qscore(rfm["Recency"], asc=True)     # менше днів — кращий бал (5)
+rfm["F"] = qscore(rfm["Frequency"], asc=False)  # більше частота — кращий бал (5)
+rfm["M"] = qscore(rfm["Monetary"], asc=False)   # більше витрати — кращий бал (5)
 rfm["RFM"] = rfm["R"] + rfm["F"] + rfm["M"]
 
 def segment(row) -> str:
+    """Проста, зрозуміла рубрикація сегментів (демо-логіка)."""
     r, f, m = row["R"], row["F"], row["M"]
     if r >= 4 and f >= 4 and m >= 4:  return "Champions"
     if r >= 4 and f >= 3:             return "Loyal"
@@ -65,13 +84,13 @@ def segment(row) -> str:
 
 rfm["Segment"] = rfm.apply(segment, axis=1)
 
-# KPI
+# --- KPI
 k1, k2, k3 = st.columns(3)
 k1.metric("Клієнтів", f"{rfm['customer_id'].nunique():,}")
 k2.metric("Замовлень (сума F)", f"{int(rfm['Frequency'].sum()):,}")
 k3.metric("Сумарна виручка (Monetary)", f"${rfm['Monetary'].sum():,.0f}")
 
-# підсумки по сегментах
+# --- Підсумки по сегментах
 seg = (rfm.groupby("Segment", as_index=False)
        .agg(customers=("customer_id", "nunique"),
             orders=("Frequency", "sum"),
@@ -96,14 +115,15 @@ with c1:
                   title="Частка клієнтів за сегментами")
     st.plotly_chart(figp, use_container_width=True)
 with c2:
-    figb = px.bar(seg.sort_values("monetary", ascending=False),
-                  x="Segment", y="monetary",
+    seg_sorted = seg.sort_values("monetary", ascending=False)
+    figb = px.bar(seg_sorted, x="Segment", y="monetary",
                   title="Виручка за сегментами",
-                  text=seg.sort_values("monetary", ascending=False)["monetary"].map(lambda x: f"${x:,.0f}"))
+                  text=seg_sorted["monetary"].map(lambda x: f"${x:,.0f}"))
     figb.update_traces(textposition="outside", hovertemplate="%{x}<br>Виручка: $%{y:,.0f}<extra></extra>")
     figb.update_layout(xaxis_title="Сегмент", yaxis_title="Виручка, $", margin=dict(t=60, b=40))
     st.plotly_chart(figb, use_container_width=True)
 
+# --- ТОП клієнти
 st.markdown("#### ТОП-клієнти за цінністю")
 top = rfm.sort_values(["Monetary", "Frequency"], ascending=False).head(50).copy()
 top_disp = top[["customer_id", "Recency", "Frequency", "Monetary", "RFM", "Segment"]].rename(
@@ -114,3 +134,4 @@ top_disp["Monetary ($)"] = top_disp["Monetary ($)"].map(lambda x: f"${x:,.2f}")
 st.dataframe(top_disp, use_container_width=True)
 
 st.caption("RFM: Recency — давність останньої покупки (менше — краще), Frequency — частота, Monetary — загальна грошова цінність.")
+ 

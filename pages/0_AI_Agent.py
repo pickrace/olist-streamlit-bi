@@ -1,10 +1,4 @@
-import os
-import json
-import math
 import duckdb
-import typing as T
-from dataclasses import dataclass
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,31 +9,35 @@ from src.data import get_facts
 # -----------------------------
 # Налаштування сторінки
 # -----------------------------
-st.set_page_config(page_title="AI Agent — Olist BI", layout="wide")
-st.title("AI-агент: ваш data-copilot")
+st.set_page_config(page_title="AI-Агент — Olist BI", layout="wide")
+st.title("🤖 AI-агент: ваш data-copilot")
+st.caption("Став ‘людські’ питання або пиши безпечний SELECT по таблиці facts.")
 
 # -----------------------------
 # Завантаження даних (кеш)
+# ліміт беремо лише з session_state['max_orders'].
+# Якщо його нема → get_facts(.., max_orders=None) і беремо ВСІ дані.
 # -----------------------------
 @st.cache_data(show_spinner=False)
-def load_facts():
-    f = get_facts("data").copy()
-    f = f.dropna(subset=["order_purchase_timestamp"])
-    f["order_purchase_timestamp"] = pd.to_datetime(f["order_purchase_timestamp"], errors="coerce")
-    f["purchase_date"] = f["order_purchase_timestamp"].dt.date
-    f["YearMonth"] = f["order_purchase_timestamp"].dt.to_period("M").astype(str)
-    f["gross_revenue"] = pd.to_numeric(f.get("gross_revenue", 0), errors="coerce").fillna(0.0)
-    # опціональні поля (якщо є)
+def load_facts(data_dir: str, max_orders: int | None):
+    # src.data.get_facts уже робить усі потрібні поля (purchase_dt, purchase_date, ym, on_time тощо)
+    f = get_facts(data_dir, max_orders=max_orders).copy()
+    # страховка від відсутніх колонок у кастомних наборах
+    if "purchase_date" not in f.columns:
+        ts = pd.to_datetime(f["order_purchase_timestamp"], errors="coerce")
+        f["purchase_date"] = ts.dt.date
+    for c in ["gross_revenue", "delivery_time_h", "delay_h"]:
+        if c in f.columns:
+            f[c] = pd.to_numeric(f[c], errors="coerce")
     if "on_time" not in f.columns:
         f["on_time"] = np.nan
-    for c in ["delivery_time_h", "delay_h"]:
-        if c not in f.columns:
-            f[c] = np.nan
-        else:
-            f[c] = pd.to_numeric(f[c], errors="coerce")
     return f
 
-facts = load_facts()
+facts = load_facts("data", st.session_state.get("max_orders"))
+
+if facts.empty:
+    st.error("Дані не знайдені. Перевір на головній сторінці налаштування джерела/Release.")
+    st.stop()
 
 # -----------------------------
 # Сайдбар: фільтри + параметри ROI
@@ -50,21 +48,24 @@ d1, d2 = st.sidebar.date_input("Період", value=(min_d, max_d), min_value=m
 view = facts.loc[(facts["purchase_date"] >= d1) & (facts["purchase_date"] <= d2)].copy()
 
 margin_pct = st.sidebar.number_input("Валова маржа, %", 1, 99, 55)
-pickpack_cost = st.sidebar.number_input("Витрати фулфілменту/замовлення, $", 0.0, 20.0, 1.2, 0.1)
+pickpack_cost = st.sidebar.number_input("Витрати фулфілменту/замовлення, R$", 0.0, 20.0, 1.2, 0.1)
 
 # -----------------------------
-# Сервісні функції/інструменти (tools), які може викликати агент
+# Сервісні інструменти (tools)
 # -----------------------------
 def tool_kpis(df: pd.DataFrame) -> dict:
+    """Базові KPI: к-сть, виручка, AOV, on-time%."""
     n = len(df)
-    rev = float(df["gross_revenue"].sum())
-    aov = rev/n if n else 0.0
-    on_time = float(df["on_time"].mean()) if df["on_time"].notna().any() else None
+    rev = float(df["gross_revenue"].sum()) if "gross_revenue" in df else 0.0
+    aov = rev / n if n else 0.0
+    on_time = float(df["on_time"].mean()) if "on_time" in df and df["on_time"].notna().any() else None
     return {"orders": n, "revenue": rev, "aov": aov, "on_time_rate": on_time}
 
 def tool_trend(df: pd.DataFrame, rolling_days: int = 7) -> pd.DataFrame:
+    """Тренд по днях + ковзна середня."""
     by_day = df.groupby("purchase_date", as_index=False).agg(
-        orders=("order_id","count"), revenue=("gross_revenue","sum")
+        orders=("order_id","count"),
+        revenue=("gross_revenue","sum")
     )
     if rolling_days and len(by_day) >= rolling_days:
         by_day["orders_ma"] = by_day["orders"].rolling(rolling_days).mean()
@@ -72,16 +73,18 @@ def tool_trend(df: pd.DataFrame, rolling_days: int = 7) -> pd.DataFrame:
     return by_day
 
 def tool_payments_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    """Розклад по оплатах: частки, виручка, AOV."""
     if "payment_type" not in df.columns:
         return pd.DataFrame()
     g = (df.groupby("payment_type", dropna=False)
            .agg(orders=("order_id","count"), revenue=("gross_revenue","sum"))
            .reset_index().sort_values("revenue", ascending=False))
-    g["AOV"] = g["revenue"]/g["orders"]
-    g["share_%"] = 100*g["orders"]/g["orders"].sum()
+    g["AOV"] = g["revenue"] / g["orders"]
+    g["share_%"] = 100 * g["orders"] / g["orders"].sum()
     return g
 
 def tool_reviews_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Залежність оцінок від SLA."""
     if "review_score" not in df.columns:
         return pd.DataFrame()
     g = (df.groupby("review_score", dropna=False)
@@ -93,23 +96,28 @@ def tool_reviews_summary(df: pd.DataFrame) -> pd.DataFrame:
     return g
 
 def tool_rfm(df: pd.DataFrame) -> pd.DataFrame:
-    # якщо немає customer_id — використовуємо order_id як сурогат (демо)
+    """Простий RFM (якщо нема customer_id, використовуємо order_id як сурогат для демо)."""
     if "customer_id" not in df.columns or df["customer_id"].isna().all():
         df = df.copy()
         df["customer_id"] = df["order_id"]
-    snapshot = pd.to_datetime(df["order_purchase_timestamp"]).max() + pd.Timedelta(days=1)
+    snapshot = pd.to_datetime(df["purchase_dt"] if "purchase_dt" in df else df["order_purchase_timestamp"]).max() + pd.Timedelta(days=1)
     rfm = (df.groupby("customer_id").agg(
-        Recency=("order_purchase_timestamp", lambda s: (snapshot - pd.to_datetime(s).max()).days),
+        Recency=("purchase_dt" if "purchase_dt" in df else "order_purchase_timestamp",
+                 lambda s: (snapshot - pd.to_datetime(s).max()).days),
         Frequency=("order_id","count"),
         Monetary=("gross_revenue","sum")
     ).reset_index())
-    # квінтильні бали
+
+    # квінтильні бали (з запасом на вироджені розподіли)
     def qscore(series, asc):
         try:
-            q = pd.qcut(series.rank(method="first"), 5, labels=[5,4,3,2,1] if asc else [1,2,3,4,5])
+            # rank() знімає проблему з дублікатами
+            q = pd.qcut(series.rank(method="first"), 5,
+                        labels=[5,4,3,2,1] if asc else [1,2,3,4,5])
             return q.astype(int)
         except Exception:
             return pd.Series([3]*len(series), index=series.index)
+
     rfm["R"] = qscore(rfm["Recency"], True)
     rfm["F"] = qscore(rfm["Frequency"], False)
     rfm["M"] = qscore(rfm["Monetary"], False)
@@ -117,76 +125,56 @@ def tool_rfm(df: pd.DataFrame) -> pd.DataFrame:
     return rfm
 
 def tool_roi_reduce_late(df: pd.DataFrame, reduce_pp: float, margin_pct: float, pickpack_cost: float) -> dict:
-    # оцінка повернутої виручки/прибутку при скороченні частки late на reduce_pp п.п.
+    """Оцінка ефекту від скорочення частки 'late' на reduce_pp п.п."""
     if "on_time" not in df.columns or df["on_time"].isna().all():
         return {"note": "on_time недоступний у вибірці"}
-    orders = df.copy()
-    late = orders[orders["on_time"] == False]
+    late = df[df["on_time"] == False]
     late_rev = float(late["gross_revenue"].sum())
-    recaptured_rev = late_rev * (reduce_pp/100.0)
-    profit = recaptured_rev * (margin_pct/100.0)  # fulfillment cost можна не списувати, бо це «врятовані» замовлення
+    recaptured_rev = late_rev * (reduce_pp / 100.0)
+    profit = recaptured_rev * (margin_pct / 100.0)
     return {"recaptured_revenue": recaptured_rev, "profit": profit}
 
 def tool_sql_query(sql: str, df: pd.DataFrame) -> pd.DataFrame:
-    # дозволимо тільки безпечні SELECT
+    """Безпечний SELECT по таблиці facts (через DuckDB in-memory)."""
     q = sql.strip().lower()
-    if not q.startswith("select") or ("drop" in q or "update" in q or "delete" in q or "insert" in q):
-        raise ValueError("Дозволені лише SELECT-запити.")
+    forbidden = ("drop", "update", "delete", "insert", "alter", "create", "replace")
+    if not q.startswith("select") or any(x in q for x in forbidden):
+        raise ValueError("Дозволені лише безпечні SELECT-запити.")
     con = duckdb.connect()
-    con.register("facts", df)  # доступ до таблиці facts
+    con.register("facts", df)
     out = con.execute(sql).fetch_df()
     con.close()
     return out
-
-
-# реєстрація інструментів
-TOOLS = {
-    "lambda sql": tool_sql_query(duckdb.sql, view),
-    "kpis": tool_kpis,
-    "trend": tool_trend,
-    "payments_breakdown": tool_payments_breakdown,
-    "reviews_summary": tool_reviews_summary,
-    "rfm": tool_rfm,
-    "roi_reduce_late": tool_roi_reduce_late,
-}
 
 # -----------------------------
 # LLM інтеграція (опціонально)
 # -----------------------------
 def have_openai() -> bool:
     try:
-        import openai  # noqa
+        import openai  # noqa: F401
         return bool(st.secrets.get("OPENAI_API_KEY"))
     except Exception:
         return False
 
 def llm_answer(prompt: str, df: pd.DataFrame) -> str:
     """
-    Простий pipeline: даємо моделі короткий контекст (які є метрики й інструменти),
-    просимо вирішити задачу; якщо модель просить дані — сама уточнює,
-    але ми ще робимо локальні графіки/таблиці, щоб користувачу було наочно.
+    Легка консультація від LLM: коротка відповідь + порада дії.
+    Дані/графіки додаємо локально окремо (render_tool).
     """
     from openai import OpenAI
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
     system = (
         "You are a business analytics copilot for an e-commerce dataset (Olist). "
-        "Be concise. When user asks for specific metrics or slices, pick the best tool from: "
+        "Be concise. When user asks for specific metrics or slices, pick the best tool: "
         "kpis, trend, payments_breakdown, reviews_summary, rfm, roi_reduce_late. "
-        "Explain the result and what action to take (process optimization / marketing / SLA)."
+        "Always include a practical recommendation (process optimization / marketing / SLA)."
     )
-
-    # Легкий підхід: без tool-calling, модель формує відповідь-консультацію,
-    # а дані / графіки будуємо локально евристично нижче.
-    # Якщо хочеш function-calling — можна розширити, але для Cloud цього достатньо.
-
-    msg = [{"role":"system","content":system},
-           {"role":"user","content":prompt}]
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": prompt}]
     try:
-        # маленька й дешева модель цілком достатня
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=msg,
+            messages=messages,
             temperature=0.3,
         )
         return resp.choices[0].message.content.strip()
@@ -198,7 +186,7 @@ def llm_answer(prompt: str, df: pd.DataFrame) -> str:
 # -----------------------------
 def local_route(prompt: str) -> str:
     p = prompt.lower()
-    if any(k in p for k in ["kpi","замовлен", "виручк", "aov", "середн", "прибут", "kpi"]):
+    if any(k in p for k in ["kpi","замовлен", "виручк", "aov", "середн", "прибут"]):
         return "kpis"
     if any(k in p for k in ["тренд", "динамік", "по днях", "time series"]):
         return "trend"
@@ -213,21 +201,25 @@ def local_route(prompt: str) -> str:
     return "kpis"
 
 # -----------------------------
-# Побудова графіків/таблиць за вибраним інструментом
+# Побудова графіків/таблиць за інструментом
 # -----------------------------
 def render_tool(tool_name: str, df: pd.DataFrame):
     if tool_name == "kpis":
         k = tool_kpis(df)
         c1,c2,c3,c4 = st.columns(4)
         c1.metric("Замовлення", f"{k['orders']:,}")
-        c2.metric("Виручка", f"${k['revenue']:,.0f}")
-        c3.metric("AOV", f"${k['aov']:,.2f}")
+        c2.metric("Виручка", f"R${k['revenue']:,.0f}")
+        c3.metric("AOV", f"R${k['aov']:,.2f}")
         c4.metric("On-time", f"{k['on_time_rate']*100:,.1f}%" if k['on_time_rate'] is not None else "—")
 
     elif tool_name == "trend":
         by_day = tool_trend(df, rolling_days=7)
-        fig = px.line(by_day, x="purchase_date", y=["orders","revenue","orders_ma","revenue_ma"],
-                      title="Тренди: замовлення/виручка (MA7 — пунктир)")
+        y_cols = [c for c in ["orders","revenue","orders_ma","revenue_ma"] if c in by_day.columns]
+        fig = px.line(by_day, x="purchase_date", y=y_cols, title="Тренди: замовлення/виручка (MA7 — пунктир)")
+        # робимо MA лінії пунктирними (якщо є)
+        for tr in fig.data:
+            if tr.name in ("orders_ma","revenue_ma"):
+                tr.update(line=dict(dash="dash"))
         st.plotly_chart(fig, use_container_width=True)
 
     elif tool_name == "payments_breakdown":
@@ -236,12 +228,18 @@ def render_tool(tool_name: str, df: pd.DataFrame):
             st.info("У даних немає payment_type.")
             return
         disp = t.copy()
-        disp["AOV"] = disp["AOV"].map(lambda x: f"${x:,.2f}")
-        disp["revenue"] = disp["revenue"].map(lambda x: f"${x:,.0f}")
+        disp["AOV"] = disp["AOV"].map(lambda x: f"R${x:,.2f}")
+        disp["revenue"] = disp["revenue"].map(lambda x: f"R${x:,.0f}")
         disp["share_%"] = disp["share_%"].map(lambda x: f"{x:.1f}%")
-        st.dataframe(disp.rename(columns={"payment_type":"Тип оплати","orders":"Замовлення","revenue":"Виручка"}), use_container_width=True)
-        st.plotly_chart(px.bar(t, x="payment_type", y="revenue", title="Виручка за типом оплати",
-                               text=t["revenue"].map(lambda x: f"${x:,.0f}")), use_container_width=True)
+        st.dataframe(
+            disp.rename(columns={"payment_type":"Тип оплати","orders":"Замовлення","revenue":"Виручка"}),
+            use_container_width=True
+        )
+        st.plotly_chart(
+            px.bar(t, x="payment_type", y="revenue", title="Виручка за типом оплати",
+                   text=t["revenue"].map(lambda x: f"R${x:,.0f}")),
+            use_container_width=True
+        )
 
     elif tool_name == "reviews_summary":
         t = tool_reviews_summary(df)
@@ -252,14 +250,15 @@ def render_tool(tool_name: str, df: pd.DataFrame):
         disp = t[["review_score","orders","on_time_%","delivery_time_h","delay_h"]].copy()
         disp.columns = ["Оцінка","Замовлення","On-time, %","Сер. час достав., год","Сер. запізн., год"]
         st.dataframe(disp, use_container_width=True)
-        st.plotly_chart(px.line(t, x="review_score", y="on_time", markers=True, title="On-time % vs оцінка")
-                        .update_yaxes(tickformat=".0%"), use_container_width=True)
+        fig = px.line(t, x="review_score", y="on_time", markers=True, title="On-time % vs оцінка")
+        fig.update_yaxes(tickformat=".0%")
+        st.plotly_chart(fig, use_container_width=True)
 
     elif tool_name == "rfm":
         rfm = tool_rfm(df)
-        seg = (rfm.groupby("RFM").size().reset_index(name="customers"))
         st.dataframe(rfm.sort_values(["Monetary","Frequency"], ascending=False).head(30), use_container_width=True)
-        st.plotly_chart(px.histogram(rfm, x="RFM", nbins=10, title="Розподіл RFM-суми"), use_container_width=True)
+        st.plotly_chart(px.histogram(rfm, x="RFM", nbins=10, title="Розподіл RFM-суми"),
+                        use_container_width=True)
 
     elif tool_name == "roi_reduce_late":
         col = st.columns([1,1,2])
@@ -270,29 +269,30 @@ def render_tool(tool_name: str, df: pd.DataFrame):
             st.info(res["note"])
             return
         c1,c2 = st.columns(2)
-        c1.metric("Повернута виручка", f"${res['recaptured_revenue']:,.0f}")
-        c2.metric("Інкрементальний прибуток", f"${res['profit']:,.0f}")
-        st.caption("Оцінка: за рахунок усунення частини «late» замовлень без додаткових змін у цінах/маржі.")
+        c1.metric("Повернута виручка", f"R${res['recaptured_revenue']:,.0f}")
+        c2.metric("Інкрементальний прибуток", f"R${res['profit']:,.0f}")
+        st.caption("Оцінка: усуваємо частину «late» без змін у цінах/маржі — це «врятовані» замовлення.")
 
 # -----------------------------
-# UI: швидкі підказки
+# UI: підказки + історія чату
 # -----------------------------
 st.markdown("**Спробуйте запит:** "
-            "`покажи kpi за період`, `дай тренд по днях і де пік`, "
+            "`покажи kpi за період`, `дай тренд по днях`, "
             "`які типи оплати дають найбільше виручки`, `як доставка вплинула на оцінки`, "
             "`які RFM сегменти`, `якщо зменшити прострочки на 5 п.п., який ефект?`")
 
-# ініціалізація чату
 if "chat" not in st.session_state:
-    st.session_state.chat = [{"role":"assistant","content":"Привіт! Я допоможу розібратись у даних і підкажу, що робити для зростання."}]
+    st.session_state.chat = [{"role": "assistant",
+                              "content": "Привіт! Я допоможу розібратись у даних і підкажу, що робити для зростання."}]
 
 for m in st.session_state.chat:
     with st.chat_message(m["role"]):
         st.write(m["content"])
 
-
-if st.button("🔍 Автоаналіз (згенеруй 3 корисні зрізи)"):
-    # простий план: модель або локальна логіка пропонує 3 SQL
+# -----------------------------
+# Автоаналіз (3 корисні зрізи)
+# -----------------------------
+if st.button("🔍 Автоаналіз (3 корисні зрізи)"):
     candidates = [
         "SELECT payment_type, COUNT(*) AS orders, SUM(gross_revenue) AS revenue FROM facts GROUP BY 1 ORDER BY revenue DESC LIMIT 10",
         "SELECT customer_state, AVG(CASE WHEN on_time THEN 1 ELSE 0 END) AS on_time_rate, COUNT(*) AS orders FROM facts GROUP BY 1 HAVING COUNT(*)>100 ORDER BY on_time_rate ASC LIMIT 10",
@@ -306,11 +306,12 @@ if st.button("🔍 Автоаналіз (згенеруй 3 корисні зр�
         except Exception as e:
             st.warning(f"Не вдалось виконати: {e}")
 
-
-# прийом повідомлення
+# -----------------------------
+# Прийом повідомлення
+# -----------------------------
 user_msg = st.chat_input("Постав запитання про дані або попроси поради…")
 if user_msg:
-    st.session_state.chat.append({"role":"user","content":user_msg})
+    st.session_state.chat.append({"role": "user", "content": user_msg})
     with st.chat_message("user"):
         st.write(user_msg)
 
@@ -324,7 +325,7 @@ if user_msg:
     with st.chat_message("assistant"):
         if answer_text:
             st.write(answer_text)
-        # додаємо релевантну візуалізацію/таблицю
         render_tool(tool, view)
 
-    st.session_state.chat.append({"role":"assistant","content":answer_text or "(згенеровано локально) див. графіки/таблиці вище"})
+    st.session_state.chat.append({"role": "assistant",
+                                  "content": answer_text or "(згенеровано локально) див. графіки/таблиці вище"})

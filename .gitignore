@@ -1,23 +1,80 @@
+# ----------------------
 # Python
+# ----------------------
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
 *.pkl
+*.so
 
-# Virtual env
+# ----------------------
+# Virtual envs
+# ----------------------
 .venv/
-env/
 venv/
+env/
+ENV/
 
-# IDE
+# ----------------------
+# Build / packaging
+# ----------------------
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# ----------------------
+# Tests / lint caches
+# ----------------------
+.pytest_cache/
+.coverage*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ----------------------
+# IDE / OS junk
+# ----------------------
 .idea/
 .vscode/
-
-# Data cache
-*.zip
-*.parquet
-
-data/
-.streamlit/secrets.toml
 .DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+
+# ----------------------
+# Notebooks
+# ----------------------
+.ipynb_checkpoints/
+
+# ----------------------
+# Data (тяжкі файли тримаємо поза гітом; у Cloud тягнемо з Release)
+# ----------------------
+data/
+*.parquet
+*.zip
+*.gz
+*.bz2
+
+# ----------------------
+# Logs / tmp
+# ----------------------
+logs/
+*.log
+.cache/
+tmp/
+temp/
+
+# ----------------------
+# Streamlit
+# ----------------------
+.streamlit/*
+!.streamlit/config.toml
+
+# ----------------------
+# Kaggle creds (на всяк випадок)
+# ----------------------
+kaggle.json

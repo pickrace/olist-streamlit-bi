@@ -1,14 +1,22 @@
+# Core app
 streamlit>=1.36,<2.0
-pandas>=2.1
-numpy>=1.26
-plotly>=5.22
-mlxtend>=0.23
-pyarrow>=16.0
-python-dateutil>=2.9
-kaggle>=1.6
-requests>=2.31
-openai>=1.40
-duckdb>=0.10
-pydantic>=2.7
-scikit-learn>=1.4
-google-generativeai>=0.5.0
+pandas>=2.1,<2.3
+numpy>=1.26,<2.1
+plotly>=5.22,<6.0
+requests>=2.31,<2.33
+python-dateutil>=2.9,<3.0
+pyarrow>=16.0,<19.0
+duckdb>=0.10,<1.2
+
+# Analytics / ML
+scikit-learn>=1.4,<1.7
+scipy>=1.10,<2.0
+mlxtend>=0.23,<0.25
+
+# LLM (опційно: OpenAI або Gemini — можна використовувати будь-що з двох)
+openai>=1.40,<2.0
+google-generativeai>=0.5.0,<0.7.0
+pydantic>=2.7,<3.0
+
+# Інше
+kaggle>=1.6,<1.7
