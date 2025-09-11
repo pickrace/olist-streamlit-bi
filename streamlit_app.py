@@ -1,57 +1,53 @@
-import pathlib, requests, zipfile, io, streamlit as st
-import pandas as pd
-import plotly.express as px
-from src.data import get_facts
+# streamlit_app.py
+import streamlit as st
+import os, io, zipfile, requests
+from src.data import get_facts, ensure_parquet_cache
 
-DATA_DIR = pathlib.Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+st.set_page_config(page_title="Магістерський проєкт — Olist BI", layout="wide")
+
+# --- Титулка
+st.title(" Магістерський проєкт")
+st.subheader("Інтелектуальний аналіз даних для оптимізації бізнес-процесів (e-commerce Olist)")
+st.markdown("""
+**Автор:** Пантя Максим • **Факультет:** Економічний • **Рік:** 2025
+
+Це простий, але корисний BI-інструмент: дивимось KPI, доставку (SLA), оплати, відгуки, сегменти RFM, кошики товарів (Market Basket), **ROI-калькулятор**, і працюємо з **AI-агентом**.
+""")
+
+# --- Завантаження/перевірка даних з GitHub Release
+RELEASE_ZIP = st.secrets.get("DATA_RELEASE_ZIP", "")  # наприклад: https://github.com/<user>/<repo>/releases/download/v1.0/olist_data.zip
+DATA_DIR = "data"
 
 def ensure_data():
-    needed = [
-        "olist_orders_dataset.csv",
-        "olist_order_items_dataset.csv",
-        "olist_order_payments_dataset.csv",
-        "olist_order_reviews_dataset.csv",
-        "olist_customers_dataset.csv",
-        "olist_geolocation_dataset.csv",
-        "olist_products_dataset.csv",
-        "olist_sellers_dataset.csv",
-        "product_category_name_translation.csv",
-    ]
-    if all((DATA_DIR/f).exists() for f in needed):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    # якщо вже є CSV — нічого не робимо
+    if any(fn.endswith(".csv") for fn in os.listdir(DATA_DIR)):
         return
-    st.info("Завантажую Olist dataset...")
-    url = "https://github.com/pickrace/olist-streamlit-bi/releases/download/v1.0/olis_data.zip"
-    st.write("Downloading from:", url)
-    r = requests.get(url)
-    st.write("Content-Type:", r.headers.get("Content-Type"))
-    z = zipfile.ZipFile(io.BytesIO(r.content))
-    z.extractall(DATA_DIR)
+    if not RELEASE_ZIP:
+        st.warning("Дані не знайдено і DATA_RELEASE_ZIP не задано в Secrets.")
+        return
+    st.info("Завантажую Olist dataset з Release…")
+    r = requests.get(RELEASE_ZIP, allow_redirects=True, timeout=60)
+    r.raise_for_status()
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        z.extractall(DATA_DIR)
 
 ensure_data()
+ensure_parquet_cache(DATA_DIR)  # прискорювач читання (Parquet)
 
+# --- Кнопки-навігація
+st.markdown("### Перейдіть до сторінок аналізу")
+cols = st.columns(3)
+with cols[0]:
+    st.page_link("pages/1_KPI_Trends.py", label="📈 KPI & Trends")
+    st.page_link("pages/3_Payments.py", label="💳 Payments")
+    st.page_link("pages/4_Reviews.py", label="⭐ Reviews")
+with cols[1]:
+    st.page_link("pages/5_RFM.py", label="👥 RFM")
+    st.page_link("pages/6_Market_Basket.py", label="🧺 Market Basket")
+    st.page_link("pages/7_Geo_SLA.py", label="🌎 Geo-SLA")
+with cols[2]:
+    st.page_link("pages/8_Delay_Risk.py", label="⚠️ Ризик прострочки")
+    st.page_link("pages/0_AI_Agent.py", label="🤖 AI-Агент")
+    st.page_link("pages/2_ROI.py", label="💵 ROI / Unit Economics", disabled=False)
 
-st.set_page_config(page_title="BI — Olist Ecommerce", layout="wide", initial_sidebar_state="expanded")
-st.title("Інтелектуальний аналіз для оптимізації бізнес‑процесів — Olist")
-
-st.sidebar.header("Дані")
-st.sidebar.write("Покладіть CSV Kaggle у `data/` або працюйте на синтетичних даних (за замовчуванням).")
-
-# Business assumptions
-st.sidebar.header("Припущення для ROI")
-margin_pct = st.sidebar.number_input("Середня валова маржа, % від виручки", 1, 99, 55)
-pickpack_cost = st.sidebar.number_input("Витрати на замовлення (fulfillment), $", 0.0, 100.0, 1.2, 0.1)
-
-facts = get_facts("data")
-facts = facts.dropna(subset=["order_purchase_timestamp"])
-
-# Filters
-st.sidebar.header("Глобальні фільтри")
-min_d, max_d = facts["order_purchase_timestamp"].min(), facts["order_purchase_timestamp"].max()
-date_range = st.sidebar.date_input("Період", value=(min_d.date(), max_d.date()), min_value=min_d.date(), max_value=max_d.date())
-start_d, end_d = date_range
-mask = (facts["purchase_date"] >= start_d) & (facts["purchase_date"] <= end_d)
-view = facts.loc[mask].copy()
-
-st.markdown("---")
-st.caption("Дані: Brazilian E‑Commerce Public Dataset by Olist (Kaggle, CC BY‑NC‑SA 4.0) • Цей застосунок — академічний приклад.")

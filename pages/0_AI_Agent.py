@@ -1,9 +1,7 @@
-# 0_🤖_AI_Agent.py
-# AI-агент для твого дашборду: відповідає на питання, будує графіки та підказує рішення
-
 import os
 import json
 import math
+import duckdb
 import typing as T
 from dataclasses import dataclass
 
@@ -17,8 +15,8 @@ from src.data import get_facts
 # -----------------------------
 # Налаштування сторінки
 # -----------------------------
-st.set_page_config(page_title="🤖 AI Agent — Olist BI", layout="wide")
-st.title("🤖 AI-агент: ваш data copilot")
+st.set_page_config(page_title="AI Agent — Olist BI", layout="wide")
+st.title("AI-агент: ваш data-copilot")
 
 # -----------------------------
 # Завантаження даних (кеш)
@@ -129,7 +127,21 @@ def tool_roi_reduce_late(df: pd.DataFrame, reduce_pp: float, margin_pct: float, 
     profit = recaptured_rev * (margin_pct/100.0)  # fulfillment cost можна не списувати, бо це «врятовані» замовлення
     return {"recaptured_revenue": recaptured_rev, "profit": profit}
 
+def tool_sql_query(sql: str, df: pd.DataFrame) -> pd.DataFrame:
+    # дозволимо тільки безпечні SELECT
+    q = sql.strip().lower()
+    if not q.startswith("select") or ("drop" in q or "update" in q or "delete" in q or "insert" in q):
+        raise ValueError("Дозволені лише SELECT-запити.")
+    con = duckdb.connect()
+    con.register("facts", df)  # доступ до таблиці facts
+    out = con.execute(sql).fetch_df()
+    con.close()
+    return out
+
+
+# реєстрація інструментів
 TOOLS = {
+    "lambda sql": tool_sql_query(duckdb.sql, view),
     "kpis": tool_kpis,
     "trend": tool_trend,
     "payments_breakdown": tool_payments_breakdown,
@@ -277,6 +289,23 @@ if "chat" not in st.session_state:
 for m in st.session_state.chat:
     with st.chat_message(m["role"]):
         st.write(m["content"])
+
+
+if st.button("🔍 Автоаналіз (згенеруй 3 корисні зрізи)"):
+    # простий план: модель або локальна логіка пропонує 3 SQL
+    candidates = [
+        "SELECT payment_type, COUNT(*) AS orders, SUM(gross_revenue) AS revenue FROM facts GROUP BY 1 ORDER BY revenue DESC LIMIT 10",
+        "SELECT customer_state, AVG(CASE WHEN on_time THEN 1 ELSE 0 END) AS on_time_rate, COUNT(*) AS orders FROM facts GROUP BY 1 HAVING COUNT(*)>100 ORDER BY on_time_rate ASC LIMIT 10",
+        "SELECT strftime(order_purchase_timestamp, '%Y-%m') AS ym, COUNT(*) AS orders, SUM(gross_revenue) AS revenue FROM facts GROUP BY 1 ORDER BY 1"
+    ]
+    for sql in candidates:
+        st.code(sql, language="sql")
+        try:
+            df_sql = tool_sql_query(sql, view)
+            st.dataframe(df_sql, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Не вдалось виконати: {e}")
+
 
 # прийом повідомлення
 user_msg = st.chat_input("Постав запитання про дані або попроси поради…")

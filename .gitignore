@@ -17,3 +17,7 @@ venv/
 # Data cache
 *.zip
 *.parquet
+
+data/
+.streamlit/secrets.toml
+.DS_Store
