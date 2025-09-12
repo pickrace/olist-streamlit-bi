@@ -93,7 +93,6 @@ pages/                   # сторінки з аналітикою + агент
   3_Payments.py
   4_Reviews.py
   5_RFM.py
-  6_Market_Basket.py
   7_ROI.py
   8_Geo_SLA.py
   9_Delay_Risk.py

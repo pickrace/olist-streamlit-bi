@@ -91,17 +91,26 @@ else:
 
 # --- Кнопки-навігація
 st.markdown("### Перейдіть до сторінок аналізу")
+
+def page_if_exists(path: str, label: str, **kwargs):
+    import os
+    if os.path.exists(path):
+        st.page_link(path, label=label, **kwargs)
+    else:
+        st.caption(f"⚠️ {label} — файл відсутній ({path})")
+
 cols = st.columns(3)
 with cols[0]:
-    st.page_link("pages/1_KPI_Trends.py", label="📈 KPI & Trends")
-    st.page_link("pages/3_Payments.py", label="💳 Payments")
-    st.page_link("pages/4_Reviews.py", label="⭐ Reviews")
-    st.page_link("pages/2_SLA_Delivery.py", label="🚚 Delivery")
+    page_if_exists("pages/0_AI_Agent.py", label="🤖 AI-Агент")
+    page_if_exists("pages/1_KPI_Trends.py", label="📈 KPI & Trends")
+    page_if_exists("pages/2_SLA_Delivery.py", label="🚚 Delivery")
 with cols[1]:
-    st.page_link("pages/5_RFM.py", label="👥 RFM")
-    st.page_link("pages/6_Market_Basket.py", label="🧺 Market Basket")
-    st.page_link("pages/8_Geo_SLA.py", label="🌎 Geo-SLA")
+    page_if_exists("pages/3_Payments.py", label="💳 Payments")
+    page_if_exists("pages/4_Reviews.py", label="⭐ Reviews")
+    page_if_exists("pages/5_RFM.py", label="👥 RFM")
 with cols[2]:
-    st.page_link("pages/9_Delay_Risk.py", label="⚠️ Ризик прострочки")
-    st.page_link("pages/0_AI_Agent.py", label="🤖 AI-Агент")
-    st.page_link("pages/7_ROI.py", label="💵 ROI / Unit Economics", disabled=False)
+    page_if_exists("pages/7_ROI.py", label="💵 ROI / Unit Economics")
+    page_if_exists("pages/8_Geo_SLA.py", label="🌎 Geo-SLA")
+    page_if_exists("pages/9_Delay_Risk.py", label="⚠️ Ризик прострочки", disabled=False)
+    
+    
