@@ -8,13 +8,9 @@ from src.data import get_facts
 st.set_page_config(page_title="RFM — Olist BI", layout="wide")
 st.title("👥 RFM — сегментація клієнтів")
 
-# --- Дані: ліміт беремо ТІЛЬКИ з головної (або всі дані, якщо ключа нема)
 @st.cache_data(show_spinner=False)
 def load_facts(data_dir: str, max_orders: int | None):
-    """
-    Тягнемо факт-таблицю. Якщо на головній вибраний ліміт — підхопимо його.
-    Якщо ключа немає → get_facts(..., max_orders=None) і беремо всі дані.
-    """
+    
     f = get_facts(data_dir, max_orders=max_orders).copy()
     # страховки на випадок кастомних даних
     if "purchase_date" not in f.columns:
@@ -36,7 +32,7 @@ if facts.empty:
     st.info("Дані не знайдені. Зайди на титулку та перевір джерело/ліміт.")
     st.stop()
 
-# --- Фільтри періоду
+# --- Фільтри періоду 
 min_d, max_d = facts["purchase_date"].min(), facts["purchase_date"].max()
 d1, d2 = st.date_input("Період аналізу", value=(min_d, max_d), min_value=min_d, max_value=max_d)
 view = facts.loc[(facts["purchase_date"] >= d1) & (facts["purchase_date"] <= d2)].copy()
@@ -45,7 +41,9 @@ if view.empty:
     st.info("Немає даних у вибраному періоді.")
     st.stop()
 
-# --- RFM розрахунок
+# --- RFM-розрахунок (Recency, Frequency, Monetary)
+# snapshot — точка відліку для Recency (наступний день після останнього замовлення) 
+
 snapshot = pd.to_datetime(view.get("purchase_dt", view["order_purchase_timestamp"])).max() + pd.Timedelta(days=1)
 
 rfm = (view.groupby("customer_id").agg(
@@ -71,7 +69,7 @@ rfm["R"] = qscore(rfm["Recency"], asc=True)     # менше днів — кра
 rfm["F"] = qscore(rfm["Frequency"], asc=False)  # більше частота — кращий бал (5)
 rfm["M"] = qscore(rfm["Monetary"], asc=False)   # більше витрати — кращий бал (5)
 rfm["RFM"] = rfm["R"] + rfm["F"] + rfm["M"]
-
+# --- Сегментація (демо-логіка) 
 def segment(row) -> str:
     """Проста, зрозуміла рубрикація сегментів (демо-логіка)."""
     r, f, m = row["R"], row["F"], row["M"]
@@ -84,13 +82,13 @@ def segment(row) -> str:
 
 rfm["Segment"] = rfm.apply(segment, axis=1)
 
-# --- KPI
+# --- KPI (к-сть клієнтів, замовлень, виручка)
 k1, k2, k3 = st.columns(3)
 k1.metric("Клієнтів", f"{rfm['customer_id'].nunique():,}")
 k2.metric("Замовлень (сума F)", f"{int(rfm['Frequency'].sum()):,}")
 k3.metric("Сумарна виручка (Monetary)", f"${rfm['Monetary'].sum():,.0f}")
 
-# --- Підсумки по сегментах
+# --- Підсумки по сегментах 
 seg = (rfm.groupby("Segment", as_index=False)
        .agg(customers=("customer_id", "nunique"),
             orders=("Frequency", "sum"),
@@ -100,7 +98,7 @@ seg = (rfm.groupby("Segment", as_index=False)
 seg["share_customers_%"] = 100 * seg["customers"] / seg["customers"].sum()
 
 st.markdown("#### Розподіл сегментів та внесок у виручку")
-# таблиця
+# таблиця для виводу даних по сегментам
 seg_disp = seg.copy()
 seg_disp.columns = ["Сегмент", "Клієнтів", "Замовлень", "Виручка", "Сер. дохід/клієнт", "Частка клієнтів, %"]
 seg_disp["Виручка"] = seg_disp["Виручка"].map(lambda x: f"${x:,.0f}")
@@ -108,7 +106,7 @@ seg_disp["Сер. дохід/клієнт"] = seg_disp["Сер. дохід/кл�
 seg_disp["Частка клієнтів, %"] = seg_disp["Частка клієнтів, %"].map(lambda x: f"{x:.1f}%")
 st.dataframe(seg_disp, use_container_width=True)
 
-# графіки: частка клієнтів (pie) + виручка (bar)
+# графіки: частка клієнтів (pie) + виручка (bar) 
 c1, c2 = st.columns(2)
 with c1:
     figp = px.pie(seg, names="Segment", values="customers", hole=0.45,
@@ -123,7 +121,7 @@ with c2:
     figb.update_layout(xaxis_title="Сегмент", yaxis_title="Виручка, $", margin=dict(t=60, b=40))
     st.plotly_chart(figb, use_container_width=True)
 
-# --- ТОП клієнти
+# --- ТОП клієнти за цінністю 
 st.markdown("#### ТОП-клієнти за цінністю")
 top = rfm.sort_values(["Monetary", "Frequency"], ascending=False).head(50).copy()
 top_disp = top[["customer_id", "Recency", "Frequency", "Monetary", "RFM", "Segment"]].rename(

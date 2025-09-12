@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import pandas as pd
 import numpy as np
-
+# --- функція для завантаження та підготовки даних
 CSV_FILES = {
     "orders":   "olist_orders_dataset.csv",
     "items":    "olist_order_items_dataset.csv",
@@ -13,7 +13,7 @@ CSV_FILES = {
     "products": "olist_products_dataset.csv",
     "sellers":  "olist_sellers_dataset.csv",
 }
-
+# --- допоміжні функції для читання CSV/Parquet з урахуванням кодування та кешу Parquet     
 def _read_csv(path: str, usecols=None, parse_dates=None) -> pd.DataFrame:
     try:
         return pd.read_csv(path, usecols=usecols, parse_dates=parse_dates,
@@ -21,7 +21,7 @@ def _read_csv(path: str, usecols=None, parse_dates=None) -> pd.DataFrame:
     except Exception:
         return pd.read_csv(path, usecols=usecols, parse_dates=parse_dates,
                            encoding="latin1", low_memory=False)
-
+# --- функція для створення Parquet-кешу (прискорює читання)
 def ensure_parquet_cache(data_dir: str = "data") -> None:
     os.makedirs(data_dir, exist_ok=True)
     for _, fn in CSV_FILES.items():
@@ -29,7 +29,7 @@ def ensure_parquet_cache(data_dir: str = "data") -> None:
         pq_path  = os.path.join(data_dir, fn.replace(".csv", ".parquet"))
         if os.path.exists(csv_path) and not os.path.exists(pq_path):
             _read_csv(csv_path).to_parquet(pq_path, index=False)
-
+# --- функція для читання CSV або Parquet (Parquet має пріоритет)
 def _maybe_read(data_dir: str, name: str, usecols=None, parse_dates=None) -> pd.DataFrame:
     csv_path = os.path.join(data_dir, CSV_FILES[name])
     pq_path  = os.path.join(data_dir, CSV_FILES[name].replace(".csv", ".parquet"))
@@ -45,10 +45,10 @@ def _maybe_read(data_dir: str, name: str, usecols=None, parse_dates=None) -> pd.
         return _read_csv(csv_path, usecols=usecols, parse_dates=parse_dates)
 
     return pd.DataFrame()
-
+# --- допоміжна функція для перетворення у числовий тип з обробкою помилок 
 def _to_num(s: pd.Series, fill=0.0) -> pd.Series:
     return pd.to_numeric(s, errors="coerce").fillna(fill)
-
+# --- основна функція для отримання фактів (orders + агрегати по items/payments/reviews/customers) 
 def get_facts(
     data_dir: str = "data",
     year_filter: int | None = None,
@@ -77,18 +77,18 @@ def get_facts(
     customers = _maybe_read(data_dir, "customers",
         usecols=["customer_id","customer_state"])
 
-    # дати та (опційно) фільтр по року
+    # дати та (опційно) фільтр по року замовлення 
     orders["order_purchase_timestamp"] = pd.to_datetime(
         orders.get("order_purchase_timestamp"), errors="coerce"
     )
     if year_filter:
         orders = orders[orders["order_purchase_timestamp"].dt.year.eq(year_filter)]
 
-    # якщо max_orders задано — беремо НАЙСВІЖІШІ max_orders; якщо None — всі
+    # якщо max_orders задано — беремо НАЙСВІЖІШІ max_orders; якщо None — всі дані 
     if isinstance(max_orders, (int, np.integer)) and len(orders) > max_orders:
         orders = orders.sort_values("order_purchase_timestamp").tail(max_orders)
 
-    # агрегати по товарах
+    # агрегати по товарах та оплатах 
     oi = (items.groupby("order_id", as_index=False)
           .agg(items_cnt=("product_id","count"),
                gross_revenue=("price","sum"),
@@ -98,13 +98,14 @@ def get_facts(
                 installments=("payment_installments","max"),
                 paid_value=("payment_value","sum")))
 
-    # join
+    # join усіх даних в один датафрейм  
     df = (orders.merge(oi, on="order_id", how="left")
                  .merge(pay, on="order_id", how="left")
                  .merge(reviews, on="order_id", how="left")
                  .merge(customers, on="customer_id", how="left"))
 
-    # зручні поля
+    # зручні поля для аналізу
+    # дати/часи (помилки в датах → NaT) 
     ts = pd.to_datetime(df["order_purchase_timestamp"], errors="coerce")
     df["purchase_dt"] = ts
     df["purchase_date"] = ts.dt.date
@@ -117,13 +118,13 @@ def get_facts(
     df["delivery_time_h"] = (delivered - ts).dt.total_seconds() / 3600.0
     df["delay_h"] = ((delivered - promised).dt.total_seconds() / 3600.0).clip(lower=0)
 
-    # числові поля
+    # числові поля (помилки → NaN або 0)    
     df["gross_revenue"] = _to_num(df.get("gross_revenue"), fill=0.0)
     df["paid_value"]    = _to_num(df.get("paid_value"), fill=0.0)
     df["installments"]  = _to_num(df.get("installments"), fill=1).astype(int)
     df["review_score"]  = _to_num(df.get("review_score"), fill=np.nan)
 
-    # категоріальні (економія пам'яті)
+    # категоріальні поля (помилки → "unknown" або "NA" + економія пам'яті) 
     df["payment_type"]   = df.get("payment_type", "unknown").fillna("unknown").astype("category")
     df["customer_state"] = df.get("customer_state", "NA").fillna("NA").astype("category")
     df["order_status"]   = df.get("order_status", "unknown").fillna("unknown").astype("category")

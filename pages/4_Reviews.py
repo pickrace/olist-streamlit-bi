@@ -8,7 +8,6 @@ from src.data import get_facts
 st.set_page_config(page_title="Reviews — Olist BI", layout="wide")
 st.title("⭐ Reviews — якість сервісу та вплив доставки")
 
-# --- Дані: ліміт беремо ТІЛЬКИ з головної (або всі, якщо ключа нема)
 @st.cache_data(show_spinner=False)
 def load_facts(data_dir: str, max_orders: int | None):
     f = get_facts(data_dir, max_orders=max_orders).copy()
@@ -33,7 +32,7 @@ if facts.empty:
     st.info("Дані не знайдені. Зайди на титулку та перевір джерело/ліміт.")
     st.stop()
 
-# --- Фільтри
+# --- Фільтри періоду 
 min_d, max_d = facts["purchase_date"].min(), facts["purchase_date"].max()
 d1, d2 = st.date_input("Період аналізу", value=(min_d, max_d), min_value=min_d, max_value=max_d)
 view = facts.loc[(facts["purchase_date"] >= d1) & (facts["purchase_date"] <= d2)].copy()
@@ -42,7 +41,7 @@ if view.empty:
     st.info("Немає даних у вибраному періоді.")
     st.stop()
 
-# --- KPI
+# --- KPI 
 avg_score = view["review_score"].mean()
 on_time_rate = view["on_time"].mean() if view["on_time"].notna().any() else np.nan
 avg_delay = view["delay_h"].mean()
@@ -52,7 +51,7 @@ k1.metric("Середня оцінка", f"{avg_score:,.2f}" if pd.notnull(avg_s
 k2.metric("On-time доставка", f"{on_time_rate*100:,.1f}%" if pd.notnull(on_time_rate) else "—")
 k3.metric("Сер. запізнення (год)", f"{avg_delay:,.1f}" if pd.notnull(avg_delay) else "—")
 
-# --- 1) Розподіл оцінок (кількість та частка)
+# --- 1) Розподіл оцінок (кількість та частка) 
 st.markdown("#### 1) Розподіл оцінок (кількість та частка)")
 dist = (view["review_score"]
         .value_counts(dropna=False)
@@ -60,7 +59,7 @@ dist = (view["review_score"]
         .reset_index())
 dist.columns = ["score", "orders"]
 dist["share_%"] = 100 * dist["orders"] / dist["orders"].sum()
-
+# --- графіки + табличка 
 c1, c2 = st.columns([2, 1])
 with c1:
     fig = px.bar(dist, x="score", y="orders", text="orders", title="Замовлення за оцінками")
@@ -77,7 +76,7 @@ dist_disp.columns = ["Оцінка", "Замовлення", "Частка, %"]
 dist_disp["Частка, %"] = dist_disp["Частка, %"].map(lambda x: f"{x:.1f}%")
 st.dataframe(dist_disp, use_container_width=True)
 
-# --- 2) Доставка vs Оцінки (on-time та часи)
+# --- 2) Доставка vs Оцінки (on-time та часи) 
 st.markdown("#### 2) Доставка vs Оцінки (on-time та часи)")
 by_score = (view
             .groupby("review_score", dropna=False)
@@ -89,7 +88,7 @@ by_score = (view
             .sort_values("review_score"))
 
 by_score["on_time_%"] = (by_score["on_time"] * 100).round(1)
-
+# --- табличка 
 tbl = by_score[["review_score", "orders", "on_time_%", "delivery_time_h", "delay_h"]].copy()
 tbl.columns = ["Оцінка", "Замовлення", "On-time, %", "Сер. час доставки (год)", "Сер. запізнення (год)"]
 tbl["On-time, %"] = tbl["On-time, %"].map(lambda x: f"{x:.1f}%")
@@ -97,7 +96,7 @@ tbl["Сер. час доставки (год)"] = tbl["Сер. час доста
 tbl["Сер. запізнення (год)"] = tbl["Сер. запізнення (год)"].map(lambda x: f"{x:,.1f}")
 st.dataframe(tbl, use_container_width=True)
 
-# лінія on-time% по оцінках
+# лінія on-time% по оцінках 
 fig2 = px.line(by_score, x="review_score", y="on_time",
                markers=True, title="On-time % за оцінками")
 fig2.update_yaxes(tickformat=".0%")
@@ -105,7 +104,7 @@ fig2.update_traces(hovertemplate="Оцінка %{x}<br>On-time: %{y:.1%}<extra><
 fig2.update_layout(xaxis_title="Оцінка", yaxis_title="On-time, %", margin=dict(t=60, b=40))
 st.plotly_chart(fig2, use_container_width=True)
 
-# бокс-плоти часу доставки по оцінках — показують розкид
+# бокс-плоти часу доставки по оцінках — показують розкид часів 
 if view["delivery_time_h"].notna().any():
     fig3 = px.box(view.dropna(subset=["delivery_time_h", "review_score"]),
                   x="review_score", y="delivery_time_h",

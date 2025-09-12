@@ -25,7 +25,7 @@ BR_STATE_CENTERS = {
 }
 
 # -----------------------------
-# Хелпери читання (для seller_state)
+# Завантаження фактів (кеш)
 # -----------------------------
 @st.cache_data(show_spinner=False)
 def _safe_read_csv(path: str, usecols=None):
@@ -35,13 +35,10 @@ def _safe_read_csv(path: str, usecols=None):
         return pd.read_csv(path, usecols=usecols, encoding="utf-8", low_memory=False)
     except Exception:
         return pd.read_csv(path, usecols=usecols, encoding="latin1", low_memory=False)
-
+# --- мапа order_id → seller_state (опційно)
 @st.cache_data(show_spinner=False)
 def _order_to_seller_state(data_dir: str) -> pd.DataFrame:
-    """
-    Будуємо відповідність order_id → seller_state (перший продавець у замовленні).
-    Якщо файлів нема — повертаємо порожню таблицю.
-    """
+
     items = _safe_read_csv(os.path.join(data_dir, "olist_order_items_dataset.csv"),
                            usecols=["order_id", "seller_id"])
     sellers = _safe_read_csv(os.path.join(data_dir, "olist_sellers_dataset.csv"),
@@ -53,9 +50,7 @@ def _order_to_seller_state(data_dir: str) -> pd.DataFrame:
            .agg(seller_state=("seller_state", "first")))
     return m
 
-# -----------------------------
-# Дані (ліміт беремо ТІЛЬКИ з головної; якщо ключа немає — всі дані)
-# -----------------------------
+# --- завантаження фактів з додатковими колонками
 @st.cache_data(show_spinner=False)
 def load_facts_for_geo(data_dir: str, max_orders: int | None) -> pd.DataFrame:
     f = get_facts(data_dir, max_orders=max_orders).copy()
@@ -81,13 +76,13 @@ if facts.empty:
     st.warning("Дані не знайдені. Перевір, чи є CSV у `data/` або налаштований Release на титулці.")
     st.stop()
 
-# Опційне збагачення seller_state
+# Опційне збагачення seller_state (через order_items + sellers)
 seller_map = _order_to_seller_state(DATA_DIR)
 if not seller_map.empty:
     facts = facts.merge(seller_map, on="order_id", how="left")
 
 # -----------------------------
-# Фільтр періоду
+# Фільтр періоду (дата покупки)
 # -----------------------------
 min_d, max_d = facts["purchase_date"].min(), facts["purchase_date"].max()
 d1, d2 = st.date_input("Період", value=(min_d, max_d), min_value=min_d, max_value=max_d)
@@ -98,7 +93,7 @@ if view.empty:
     st.stop()
 
 # -----------------------------
-# Вибір поля агрегації (customer_state / seller_state)
+# Вибір поля агрегації (customer_state / seller_state) 
 # -----------------------------
 opt = st.selectbox("Агрегувати за:", ["customer_state", "(опційно) seller_state"], index=0)
 if opt.startswith("(") or "seller_state" not in view.columns or view["seller_state"].isna().all():
@@ -110,7 +105,7 @@ else:
     group_col = "seller_state"
 
 # -----------------------------
-# Агрегація по штатах
+# Агрегація по штатах 
 # -----------------------------
 agg = (view.groupby(group_col, dropna=False)
        .agg(orders=("order_id", "count"),
@@ -120,7 +115,7 @@ agg = (view.groupby(group_col, dropna=False)
        .reset_index()
        .rename(columns={group_col: "state"}))
 
-# Координати
+# Координати для карти 
 agg["lat"] = agg["state"].map(lambda s: BR_STATE_CENTERS.get(s, (None, None))[0])
 agg["lon"] = agg["state"].map(lambda s: BR_STATE_CENTERS.get(s, (None, None))[1])
 agg = agg.dropna(subset=["lat", "lon"])
@@ -129,7 +124,7 @@ if agg.empty:
     st.info("Немає геокодованих штатів для відображення.")
     st.stop()
 
-# Підписи / формат
+# Підписи / формат для виводу на карту та в таблицю 
 agg["on_time_%"] = (agg["on_time_rate"] * 100.0).round(1)
 agg["hint"] = (
     "Штат: " + agg["state"].astype(str) +
@@ -139,7 +134,7 @@ agg["hint"] = (
     "<br>Сер. запізнення (днів): " + agg["avg_delay_days"].map(lambda x: f"{x:,.1f}")
 )
 
-# Загальні метрики (зважені середні)
+# Загальні метрики (зважені середні) 
 total_orders = int(agg["orders"].sum())
 weighted_on_time = (agg["on_time_rate"] * agg["orders"]).sum() / max(total_orders, 1)
 weighted_delivery = (agg["avg_delivery_days"] * agg["orders"]).sum() / max(total_orders, 1)
@@ -150,7 +145,7 @@ c2.metric("Сер. on-time", f"{weighted_on_time*100:,.1f}%")
 c3.metric("Сер. доставка", f"{weighted_delivery:,.1f} дн.")
 
 # -----------------------------
-# Карта
+# Карта 
 # -----------------------------
 st.markdown("#### Карта: розмір — к-сть замовлень, колір — on-time %")
 fig = px.scatter_geo(
@@ -158,14 +153,14 @@ fig = px.scatter_geo(
     hover_name="state",
     hover_data={"orders": True, "on_time_rate": ":.2f", "lat": False, "lon": False},
     color_continuous_scale="RdYlGn",
-    range_color=(0.6, 1.0),  # 60%..100% — проблемні зони одразу видно
+    range_color=(0.6, 1.0),  # 60%..100% — проблемні зони одразу видно 
     projection="natural earth", scope="south america", title=""
 )
 fig.update_layout(margin=dict(t=10, b=10))
 st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
-# Таблиця
+# Таблиця 
 # -----------------------------
 st.markdown("#### Таблиця по штатах")
 tab = agg[["state", "orders", "on_time_%", "avg_delivery_days", "avg_delay_days"]].copy()

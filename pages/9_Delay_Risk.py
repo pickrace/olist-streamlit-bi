@@ -37,7 +37,7 @@ def safe_read_csv(path, usecols=None, parse_dates=None):
 # -----------------------------
 @st.cache_data(show_spinner=False)
 def build_training_table(max_orders: int | None):
-    # orders + мітка late
+    # orders + мітка late (прострочка) → target "late" (1/0) 
     orders = safe_read_csv(
         os.path.join(DATA_DIR, "olist_orders_dataset.csv"),
         usecols=["order_id", "customer_id", "order_status", "order_purchase_timestamp",
@@ -45,37 +45,37 @@ def build_training_table(max_orders: int | None):
         parse_dates=["order_purchase_timestamp",
                      "order_delivered_customer_date", "order_estimated_delivery_date"]
     )
-    # беремо тільки доставлені замовлення
+    # беремо тільки доставлені замовлення 
     orders = orders[orders["order_status"] == "delivered"].copy()
 
-    # опційний ліміт: тільки з головної (для хмари), інакше — всі
+    # опційний ліміт: тільки з головної (для хмари), інакше — всі 
     if max_orders and len(orders) > max_orders:
         orders = orders.sort_values("order_purchase_timestamp").head(max_orders)
 
-    # базові фічі по датах/часах
+    # базові фічі по датах/часах 
     orders["late"] = (orders["order_delivered_customer_date"] >
                       orders["order_estimated_delivery_date"]).astype(int)
     orders["purchase_date"] = orders["order_purchase_timestamp"].dt.date
     orders["weekday"] = orders["order_purchase_timestamp"].dt.weekday
     orders["hour"] = orders["order_purchase_timestamp"].dt.hour
-    # «обіцяні» дні на доставку (грубо)
+    # «обіцяні» дні на доставку (для порівняння з реальною доставкою)   
     orders["promised_days"] = (
         orders["order_estimated_delivery_date"] - orders["order_purchase_timestamp"]
     ).dt.total_seconds() / 86400.0
 
-    # customers (штат покупця)
+    # customers (штат клієнта)  → для ознаки same_state 
     customers = safe_read_csv(
         os.path.join(DATA_DIR, "olist_customers_dataset.csv"),
         usecols=["customer_id", "customer_state"]
     )
 
-    # payments (тип і розстрочка)
+    # payments (payment_type/installments)  → категорійні фічі  
     payments = safe_read_csv(
         os.path.join(DATA_DIR, "olist_order_payments_dataset.csv"),
         usecols=["order_id", "payment_type", "payment_installments"]
     )
 
-    # items + products (вага/об’єм/фрахт)
+    # items + products (фічі по товарах: вага, об'єм, вартість доставки) → числові фічі 
     items = safe_read_csv(
         os.path.join(DATA_DIR, "olist_order_items_dataset.csv"),
         usecols=["order_id", "product_id", "seller_id", "freight_value"]
@@ -87,7 +87,7 @@ def build_training_table(max_orders: int | None):
     )
     items = items.merge(products, on="product_id", how="left")
     items["weight_kg"] = items["product_weight_g"].fillna(0) / 1000.0
-    # см^3 → дм^3
+    # см^3 → дм^3 
     items["volume_dm3"] = (
         items["product_length_cm"].fillna(0)
         * items["product_height_cm"].fillna(0)
@@ -101,27 +101,27 @@ def build_training_table(max_orders: int | None):
              total_volume_dm3=("volume_dm3", "sum"))
         .reset_index())
 
-    # sellers (штат продавця) → для ознаки same_state
+    # sellers (штат продавця) → для ознаки same_state 
     sellers = safe_read_csv(
         os.path.join(DATA_DIR, "olist_sellers_dataset.csv"),
         usecols=["seller_id", "seller_state"]
     )
     oi_sellers = items[["order_id", "seller_id"]].merge(sellers, on="seller_id", how="left")
-    # якщо кілька продавців — беремо моду (найчастіший штат)
+    # якщо кілька продавців — беремо найчастіше зустрічаний штат (mode) 
     seller_state_by_order = (
         oi_sellers.groupby("order_id")["seller_state"]
         .agg(lambda s: s.mode().iloc[0] if len(s.dropna()) else np.nan)
         .reset_index()
     )
 
-    # збір фіч у одну таблицю
+    # збір фіч у одну таблицю 
     df = (orders
           .merge(customers, on="customer_id", how="left")
           .merge(payments, on="order_id", how="left")
           .merge(items_agg, on="order_id", how="left")
           .merge(seller_state_by_order, on="order_id", how="left"))
 
-    # заповнення пропусків і приведення типів
+    # заповнення пропусків і приведення типів 
     df["same_state"] = (df["customer_state"] == df["seller_state"]).astype(int)
     df["items_cnt"] = df["items_cnt"].fillna(1)
     df["freight_value"] = df["freight_value"].fillna(0.0)
@@ -129,7 +129,7 @@ def build_training_table(max_orders: int | None):
     df["total_volume_dm3"] = df["total_volume_dm3"].fillna(0.0)
     df["payment_installments"] = df["payment_installments"].fillna(1)
 
-    # фінальні поля
+    # фінальні поля для моделі 
     features = ["weekday", "hour", "promised_days", "items_cnt",
                 "freight_value", "total_weight_kg", "total_volume_dm3",
                 "payment_type", "payment_installments",
@@ -139,14 +139,14 @@ def build_training_table(max_orders: int | None):
     df = df.dropna(subset=[target]).copy()
     return df[features + [target]]
 
-# зібрали дані (ліміт — тільки із головної)
+# зібрали дані для моделі 
 data = build_training_table(st.session_state.get("max_orders"))
 if data.empty:
     st.warning("Не вдалося зібрати навчальну таблицю. Перевір наявність CSV у data/.")
     st.stop()
 
 # -----------------------------
-# 3) Розбиття і пайплайн
+# 3) Розбиття і пайплайн моделі 
 # -----------------------------
 train_cols_num = ["weekday", "hour", "promised_days", "items_cnt",
                   "freight_value", "total_weight_kg", "total_volume_dm3",
@@ -160,7 +160,7 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
 )
 
-# One-Hot для категорій + логістична регресія.
+# One-Hot для категорій + логістична регресія 
 # ВАЖЛИВО: залишаємо sparse матрицю та використовуємо solver='saga' (працює зі sparse).
 pre = ColumnTransformer(
     transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), train_cols_cat)],
@@ -168,12 +168,12 @@ pre = ColumnTransformer(
 )
 
 clf = LogisticRegression(
-    solver="saga",        # підтримує sparse, добре працює з OHE
+    solver="saga",        # підтримує sparse, добре працює з OHE 
     max_iter=1000,
     class_weight="balanced",
     n_jobs=-1
 )
-
+# --- пайплайн із препроцесингом і моделлю 
 pipe = Pipeline([("pre", pre), ("clf", clf)])
 
 st.markdown("#### Навчання моделі (логістична регресія)")
@@ -181,15 +181,15 @@ with st.spinner("Тренуємо модель..."):
     pipe.fit(X_train, y_train)
 
 # -----------------------------
-# 4) Оцінка якості
+# 4) Оцінка якості моделі (ROC-AUC, Confusion Matrix) 
 # -----------------------------
 proba = pipe.predict_proba(X_test)[:, 1]
 roc = roc_auc_score(y_test, proba)
-
+# --- Поріг для класу late (1)
 th = st.slider("Поріг імовірності для класу 'late'", 0.1, 0.9, 0.5, 0.05)
 pred = (proba >= th).astype(int)
 cm = confusion_matrix(y_test, pred)
-
+# --- Вивід метрик
 c1, c2, c3 = st.columns(3)
 c1.metric("ROC-AUC", f"{roc:.3f}")
 c2.metric("Тест. вибірка", f"{len(y_test):,}")
@@ -202,10 +202,10 @@ cm_df = pd.DataFrame(cm,
 st.dataframe(cm_df, use_container_width=True)
 
 # -----------------------------
-# 5) Топ-ознаки (за модулем коефіцієнта)
+# 5) Топ-ознаки (за модулем коефіцієнта) 
 # Пояснюємо, які фактори сильніше впливають на ризик 'late'.
 # -----------------------------
-# Отримуємо імена one-hot фіч із fitted OHE
+# Отримуємо імена one-hot фіч із fitted OHE 
 ohe: OneHotEncoder = pipe.named_steps["pre"].named_transformers_["cat"]
 cat_feature_names = []
 for col, cats in zip(train_cols_cat, ohe.categories_):
@@ -219,7 +219,7 @@ fi = (pd.DataFrame({"feature": feature_names[:n], "coef": coefs[:n]})
       .assign(abscoef=lambda d: d["coef"].abs())
       .sort_values("abscoef", ascending=False)
       .head(20))
-
+# --- Вивід топ-ознак 
 st.markdown("#### Топ-ознаки моделі")
 st.dataframe(fi[["feature", "coef"]], use_container_width=True)
 

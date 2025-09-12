@@ -11,11 +11,11 @@ st.set_page_config(page_title="KPI & Trends — Olist BI", layout="wide")
 st.title("📈 KPI та тренди")
 
 # --- завантаження фактів (кеш)
-# Ліміт беремо ТІЛЬКИ з session_state['max_orders']; якщо його нема → всі дані.
+# 
 @st.cache_data(show_spinner=False)
 def load_facts(data_dir: str, max_orders: int | None):
     f = get_facts(data_dir, max_orders=max_orders).copy()
-    # страховки: якщо з кастомним набором прийдуть інші поля
+    # страховки: якщо з кастомним набором прийдуть інші поля, які нам не потрібні
     if "purchase_date" not in f.columns:
         ts = pd.to_datetime(f["order_purchase_timestamp"], errors="coerce")
         f["purchase_date"] = ts.dt.date
@@ -23,7 +23,7 @@ def load_facts(data_dir: str, max_orders: int | None):
         f["purchase_dt"] = pd.to_datetime(f["order_purchase_timestamp"], errors="coerce")
     if "ym" not in f.columns:
         f["ym"] = pd.to_datetime(f["purchase_dt"]).dt.to_period("M").astype(str)
-    # типи
+    # типи / заповнення
     if "gross_revenue" in f.columns:
         f["gross_revenue"] = pd.to_numeric(f["gross_revenue"], errors="coerce").fillna(0.0)
     if "on_time" not in f.columns:
@@ -36,7 +36,7 @@ if facts.empty:
     st.info("Дані не знайдені. Зайди на титулку та перевір джерело/ліміт.")
     st.stop()
 
-# --- фільтри
+# --- фільтри періоду + чекбокси
 min_d, max_d = facts["purchase_date"].min(), facts["purchase_date"].max()
 c1, c2, c3 = st.columns([2,1,1])
 with c1:
@@ -46,7 +46,7 @@ with c2:
     last_year_only = st.checkbox("Тільки останній рік у даних", value=False)
 with c3:
     use_rolling = st.checkbox("Показати 7-денне згладжування", value=True)
-
+# --- фільтрація
 view = facts.loc[(facts["purchase_date"] >= d1) & (facts["purchase_date"] <= d2)].copy()
 if last_year_only and not view.empty:
     last_year = pd.to_datetime(view["purchase_dt"]).dt.year.max()
@@ -56,26 +56,26 @@ if view.empty:
     st.info("Немає даних у вибраному періоді.")
     st.stop()
 
-# --- KPI
+# --- KPI (Orders, Revenue, AOV, On-time)
 orders_cnt = len(view)
 revenue = float(view["gross_revenue"].sum())
 aov = revenue / orders_cnt if orders_cnt else 0.0
 on_time_rate = view["on_time"].mean() if view["on_time"].notna().any() else np.nan
-
+# --- вивід KPI
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Замовлення", f"{orders_cnt:,}")
 k2.metric("Виручка", f"${revenue:,.0f}")
 k3.metric("Сер. чек (AOV)", f"${aov:,.2f}")
 k4.metric("On-time доставка", f"{on_time_rate*100:,.1f}%" if pd.notnull(on_time_rate) else "—")
 
-# --- Денний тренд: Orders (bar) + Revenue (line) + MA7 (пунктир)
+# --- Денний тренд: Orders (bar) + Revenue (line) + MA7 (пунктир) 
 by_day = (view.groupby("purchase_date", as_index=False)
           .agg(orders=("order_id","count"),
                revenue=("gross_revenue","sum")))
 if use_rolling and len(by_day) >= 7:
     by_day["orders_ma7"] = by_day["orders"].rolling(7).mean()
     by_day["revenue_ma7"] = by_day["revenue"].rolling(7).mean()
-
+# --- Комбінований графік з двома осями Y
 fig = make_subplots(specs=[[{"secondary_y": True}]])
 fig.add_trace(go.Bar(x=by_day["purchase_date"], y=by_day["orders"], name="Замовлення"),
               secondary_y=False)
@@ -97,12 +97,12 @@ fig.update_yaxes(title_text="Замовлення", secondary_y=False)
 fig.update_yaxes(title_text="Виручка, $", secondary_y=True)
 st.plotly_chart(fig, use_container_width=True)
 
-# --- Місячні підсумки: Revenue / Orders / AOV
+# --- Місячні підсумки: Revenue / Orders / AOV 
 by_month = (view.groupby("ym", as_index=False)
             .agg(orders=("order_id","count"),
                  revenue=("gross_revenue","sum")))
 by_month["AOV"] = by_month["revenue"] / by_month["orders"]
-
+# --- Два графіки в ряд
 c1, c2 = st.columns(2)
 with c1:
     st.markdown("#### Місячна виручка")
@@ -116,11 +116,11 @@ with c2:
     fig_aov.update_layout(yaxis_title="AOV, $", xaxis_title="Місяць")
     st.plotly_chart(fig_aov, use_container_width=True)
 
-# --- Теплова мапа: день тижня × година (активність)
+# --- Теплова мапа: день тижня × година (активність) 
 view["dow"] = pd.to_datetime(view["purchase_dt"]).dt.day_name()
 view["hour"] = pd.to_datetime(view["purchase_dt"]).dt.hour
 heat = (view.groupby(["dow","hour"]).size().reset_index(name="orders"))
-# класичний порядок днів
+# класичний порядок днів тижня 
 dow_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 heat["dow"] = pd.Categorical(heat["dow"], categories=dow_order, ordered=True)
 heat = heat.sort_values(["dow","hour"])

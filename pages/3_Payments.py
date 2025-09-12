@@ -8,7 +8,7 @@ from src.data import get_facts
 st.set_page_config(page_title="Payments — Olist BI", layout="wide")
 st.title("💳 Payments — структура оплат та їх вплив")
 
-# --- Дані: ліміт беремо ТІЛЬКИ з головної (або всі дані, якщо ключа нема)
+
 @st.cache_data(show_spinner=False)
 def load_facts(data_dir: str, max_orders: int | None):
     f = get_facts(data_dir, max_orders=max_orders).copy()
@@ -52,6 +52,7 @@ k1.metric("Замовлення", f"{orders_cnt:,}")
 k2.metric("Виручка", f"${revenue:,.0f}")
 k3.metric("Сер. чек (AOV)", f"${aov:,.2f}")
 
+# --- Аналіз типів оплат
 st.markdown("#### 1) Тип оплати → внесок у виручку та чек")
 
 pt = (view
@@ -63,12 +64,12 @@ pt = (view
       .reset_index())
 
 if not pt.empty:
-    # сортуємо за виручкою
+    # сортуємо за виручкою, щоб не скакало на графіку
     pt = pt.sort_values("revenue", ascending=False)
     pt["AOV"] = pt["revenue"] / pt["orders"]
     pt["share_orders_%"] = 100 * pt["orders"] / pt["orders"].sum()
 
-    # табличка (читабельно відформатована)
+    # табличка для виводу даних про типи оплат 
     disp = pt.copy()
     disp.columns = [
         "Тип оплати", "Замовлення", "Виручка",
@@ -80,7 +81,8 @@ if not pt.empty:
     disp["Частка замовлень, %"] = disp["Частка замовлень, %"].map(lambda x: f"{x:.1f}%")
     st.dataframe(disp, use_container_width=True)
 
-    # графік: виручка за типом оплати
+    # графік: виручка за типом оплати (бар)
+    st.markdown("##### Виручка за типом оплати")
     fig = px.bar(
         pt,
         x="payment_type",
@@ -98,7 +100,7 @@ if not pt.empty:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # додатково: частка замовлень (donut)
+    # додатково: частка замовлень (donut) по типу оплати 
     st.markdown("##### Частка замовлень за типами оплати")
     pie = px.pie(pt, names="payment_type", values="orders", hole=0.4)
     st.plotly_chart(pie, use_container_width=True)
@@ -115,7 +117,8 @@ if not inst.empty:
     inst["AOV"] = inst["revenue"] / inst["orders"]
     inst["share_%"] = 100 * inst["orders"] / inst["orders"].sum()
 
-    # таблиця
+    # таблиця для виводу даних по розстрочках
+    st.markdown("##### Дані по розстрочках")
     inst_disp = inst.copy()
     inst_disp.columns = ["К-сть платежів", "Замовлення", "Виручка", "Сер. чек", "Частка, %"]
     inst_disp["Виручка"] = inst_disp["Виручка"].map(lambda x: f"${x:,.0f}")
@@ -123,7 +126,8 @@ if not inst.empty:
     inst_disp["Частка, %"] = inst_disp["Частка, %"].map(lambda x: f"{x:.1f}%")
     st.dataframe(inst_disp, use_container_width=True)
 
-    # два бари поруч: к-сть замовлень та AOV
+    # два бари поруч: к-сть замовлень та AOV по к-сті платежів
+    st.markdown("##### Замовлення та середній чек (AOV) за кількістю платежів")
     c1, c2 = st.columns(2)
     with c1:
         fig1 = px.bar(inst.sort_values("orders", ascending=False),

@@ -14,8 +14,7 @@ st.subheader("Інтелектуальний аналіз даних для оп
 st.markdown("""
 **Автор:** Пантя Максим • **Факультет:** Економічний • **Рік:** 2025
 
-Це простий, але корисний BI-інструмент: дивимось KPI, доставку (SLA), оплати, відгуки, сегменти RFM,
-кошики товарів (Market Basket), **ROI-калькулятор**, і працюємо з **AI-агентом**.
+Це BI-інструмент: дивимось **KPI**, доставку **(SLA)**, оплати, відгуки, сегменти **RFM**, **ROI-калькулятор**, і працюємо з **AI-агентом**.
 """)
 
 # --- Налаштування джерела даних
@@ -53,20 +52,20 @@ def ensure_data():
 try:
     ensure_data()
 except Exception as e:
-    # додатковий запобіжник, щоб головна не падала
+    # додатковий "запобіжник", щоб головна не падала
     st.warning(f"Неочікувана помилка завантаження даних: {e}")
 
 ensure_parquet_cache(DATA_DIR)  # прискорювач читання (Parquet-кеш)
 
-# --- Контрол вибірки (к-сть рядків)
-# ЄДИНЕ місце, де задається ліміт. Інші сторінки НЕ містять власних лімітів.
+# --- Контроль вибірки (к-сть рядків)
+# ЄДИНЕ місце, де задається ліміт даних. Інші сторінки НЕ містять власних лімітів.
 if "max_orders" not in st.session_state:
-    st.session_state["max_orders"] = 10_000  # дефолт для хмари; користувач може змінити
+    st.session_state["max_orders"] = None  # дефолт для хмари; користувач може змінити
 
 st.markdown("### Налаштування вибірки")
 max_rows = st.number_input(
     "К-сть записів для аналізу (рекомендовано 10 000 для стабільності у хмарі)",
-    min_value=1_000, max_value=200_000, step=1_000, value=st.session_state["max_orders"],
+    min_value=None, max_value=200_000, step=1_000, value=st.session_state["max_orders"],
     help="Менше — швидше. Більше — детальніше, але повільніше."
 )
 st.session_state["max_orders"] = int(max_rows)
@@ -74,10 +73,10 @@ st.session_state["max_orders"] = int(max_rows)
 # --- Кешована функція завантаження фактів (швидше при повторних відкриттях)
 @st.cache_data(show_spinner=False)
 def load_facts_cached(data_dir: str, max_orders: int | None):
-    # якщо max_orders=None -> get_facts повертає всі дані (це важливо!)
+    # якщо max_orders=None -> get_facts повертає всі дані з джерела (це важливо!)
     return get_facts(data_dir, max_orders=max_orders)
 
-# --- Міні-діагностика (щоб бачити, що дані працюють з обраним лімітом)
+# --- Міні-діагностика щоб бачити, що дані працюють з обраним лімітом
 facts = load_facts_cached(DATA_DIR, st.session_state.get("max_orders"))
 
 if facts.empty:
