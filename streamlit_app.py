@@ -60,12 +60,12 @@ ensure_parquet_cache(DATA_DIR)  # прискорювач читання (Parquet
 # --- Контроль вибірки (к-сть рядків)
 # ЄДИНЕ місце, де задається ліміт даних. Інші сторінки НЕ містять власних лімітів.
 if "max_orders" not in st.session_state:
-    st.session_state["max_orders"] = None  # дефолт для хмари; користувач може змінити
+    st.session_state["max_orders"] = 10_000  # дефолт для хмари; користувач може змінити
 
 st.markdown("### Налаштування вибірки")
 max_rows = st.number_input(
     "К-сть записів для аналізу (рекомендовано 10 000 для стабільності у хмарі)",
-    min_value=None, max_value=200_000, step=1_000, value=st.session_state["max_orders"],
+    min_value=10_000, max_value=200_000, step=1_000, value=st.session_state["max_orders"],
     help="Менше — швидше. Більше — детальніше, але повільніше."
 )
 st.session_state["max_orders"] = int(max_rows)
