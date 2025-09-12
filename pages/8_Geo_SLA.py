@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly as px
+import plotly.express as px
 
 from src.data import get_facts
 
